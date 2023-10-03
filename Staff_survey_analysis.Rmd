@@ -1,0 +1,734 @@
+---
+title: "Analysis of Hospital Performance Efficiency using DEA and its impact on safer healthcare practices."
+author: "Kevin Paul"
+date: "28-08-2023"
+output: 
+  html_document:
+  theme: united
+  highlight: pygments
+  toc: TRUE
+  toc_depth: 3
+  toc_float: TRUE
+---
+------------------------------------------------------------------------
+
+
+This report aims to explore the relationship between the performance efficiency of hospitals in the South-West region and the results of the NHS Staff survey. This report first aims to determine if healthcare organizations in the South-West region of England can be identified for their ability to inculcate a relationship between their staff observing safer healthcare practices and their experience of a culture which supports improvement and innovation. To further corroborate this, the report aims to evaluate the performance efficiency of each acute trust between April 2020 and March 2023 using data envelopment analysis (DEA), to determine the impact that it could have on the staff in their bid to improve and enforce safer healthcare practices.
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+#knitr::opts_knit$set(root.dir = "C:/Users/Kevin Paul/OneDrive - University of Bath/Lectures/MN50749 - DB and BI/CW - BI/R stuff/")
+```
+
+-----------------------------------------------------------------------
+
+# Introduction
+
+Through the analysis of the datasets provided, this report aims to answer several key questions. To set the context of the analysis, here are a few questions that were considered critical to explore.
+
+1.  How did the respondents feel about the current state of ethical medical practices and a culture of innovation and improvement within their healthcare organizations? Does there exist a relationship between the two?
+
+2.  What was the performance efficiency of the hospitals being considered between April 2020 and March 2023?
+
+3.  What was the impact of the performance efficiency of the hospitals on the NHS staff survey results? Is there any correlation between the two?
+
+
+
+Through the exploration performed subsequently, this report aims to answer these crucial questions and ultimately provide certain recommendations or insights, that could potentially help identify areas of improvement.
+
+## Data Overview
+
+There were 5 data sets that were provided for analysis. Each data set includes certain relevant information that can be leveraged to cumulatively extract a useful summary of the potential performance efficiency of the hospitals.
+Below is a brief summary of the data provided.
+
+### Primary Data
+
+1.  NHS Staff Summary
+
+    The primary data provided for analysis are the results of the NHS Staff survey.The results presented in the remainder of this dataset only cover the 215 NHS trusts that took part in the survey. However, for the purpose of this report, only 23 organizations located in the South-West region of England were considered. Data in this dataset have been weighted to adjust for differences in occupational group proportions between trusts and for differences in trust size, except where otherwise stated. Historical data have been reweighted to improve comparisons over time. Base sizes are presented unweighted.
+
+### Secondary Data
+
+1.  Monthly A&E attendance:
+
+    The monthly A&E attendance file consisted data pertaining to number of patients that were admitted where the duration between arrival and admission, transfer or discharge was greater than 4 hours.
+
+2.  Monthly bed availability:
+
+    This dataset contained data relating to the number of beds that were available in each healthcare organization on a monthly basis.
+
+3.  Monthly consultant-led referral to treatment waiting times:
+
+    The dataset enables us to analyse how long patients needed to wait prior to receiving treatment from the respective department that they were referred to. 
+
+4.  Daily discharges:
+
+    This dataset contained data pertaining to the number of patients who were discharged daily.
+
+------------------------------------------------------------------------
+
+## Data Exploration and Analysis
+
+Before initiating any analysis, all the required R libraries were loaded into R studio.
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+library(tidyverse)
+library(dplyr)
+library(skimr)
+library(dlookr)
+library(factoextra)
+library(NbClust)
+library(reshape2)
+library(gridExtra)
+library(readxl)
+library(Benchmarking)
+library(ggplot2)
+library(reshape)
+
+```
+
+
+To start exploring the data, all the datasets collected were first loaded into the R environment.
+
+```{r results='hide', message=FALSE}
+data_source <- read.csv("staff survey - R FINAL.csv")
+attendance_data <- read_excel("FINAL SHEETS/A&E - Compiled dataset.xlsx")
+bed_avail_data <- read_excel("FINAL SHEETS/Bed Avail - Compiled Dataset.xlsx")
+dailydischarge_data <- read_excel("FINAL SHEETS/Daily Discharge - Compiled Dataset.xlsx")
+waitingtime_data <- read_excel("FINAL SHEETS/Waiting Time - Compiled Dataset.xlsx")
+```
+
+The exploration of data began with identifying metrics of relevance. Since the data-set collected is considerably large, the first task at hand was to traverse through each metric and identify those that had large quantities of missing data or null values. This helps determine which metric can be neglected or re-evaluated for its impact on an overall scenario.
+
+All the data collected during the NHS staff survey were already pre-processed ensuring that there was no missing data and all the questions requiring occupational group weight to be applied was already done.
+
+```{r }
+skim(data_source)
+summary(data_source)
+```
+
+Out of the entire staff survey, 17 questions were selected that directly evaluated the staff responses to their understanding and experience of patient safety culture that was being inculcated within their respective organization. Of the 17 questions, 5 questions contained responses that were scored out of 10 while the remaining 12 questions contained the percentage of employees of the respective hospital that selected ‘agree’ or ‘strongly agree’ for those particular questions. All of the above mentioned data was selected for 23 healthcare organizations in the South-West region of England.
+A dummy variable called ‘patient_facing’ was introduced to the dataset and was given a value of 1 if the healthcare organization was patient facing, else it was given a value of 0.
+
+Additionally, since all ICB's are not patient facing, they were excluded from the analysis performed.
+
+Upon viewing the summaries of the staff survey dataset, it was concluded that while there weren't a massive number of missing values for the questions that are being considered, any missing value present was imputed by evaluating the mean of the scores for that particular question.
+
+
+```{r}
+#to replace missing values present in columns
+#drop last row IHG and all ICB's
+
+source <- data_source
+source <- source[-31,]
+source <- source[-21:-27,]
+source <- mutate_all(source, ~ifelse(is.na(.x), mean(.x, na.rm = TRUE), .x))
+```
+
+Finally, for the purpose of clustering only the responses were considered and the categorical variables were neglected.
+Below is a plot to understand the mean of the responses to each question. It was observed that the responses didn't vary quite drastically from each other.
+
+The below graph depicts the mean of the responses to both types of questions asked during the survey.
+
+```{r}
+source_exp <- source[,6:53]
+means_exp <- colMeans(source_exp)
+plot(means_exp)
+
+#Below function gives a summary of outliers in the data
+#diagnose_outlier(source_exp)
+
+```
+
+Out of the 17 questions that were chosen for analysis, 12 questions contained responses that were in decimal form of the percentages of employees who either strongly agreed or agreed with the questions. The remaining 5 questions contained responses that were scaled out of 10. Hence, the 12 questions were converted from decimal to percentage format and then all responses were normalized to ensure that the two scales didn't affect the results of the clustering algorithm.
+
+Clustering simply means to group data based on a certain criteria. It performs the grouping of data without any particular data class. Clustering helps group a number of objects into clusters where good clusters tend to have a high degree of equality/association between objects into the same cluster and a high degree of inequality with other cluster objects 
+
+For the purpose of clustering the data to better understand the trends across the 23 hospitals under consideration, it was decided that the K-means clustering algorithm would be implemented. This clustering algorithm would help cluster the responses obtained from the 12 hospitals and it could help identify how the hospitals performed in the NHS staff survey. 
+
+K-means clustering is a simple clustering algorithm that partitions the data into several clusters, usually decided before implementing the algorithm. This method is a non-hierarchical clustering method that tends to classify the data in the form of one or more clusters. K-means was selected for implementation due to its relative ease of application over a large dataset. This algorithm tends to always guarantee convergence and it generalizes to clusters of different shapes and sizes. However, there do exist certain limitations to implementing this algorithm. The value of ‘k’ needs to be chosen manually prior to implementing the algorithm. This can however be overcome by using either the elbow test or the silhouette method to determine the appropriate number of clusters for the data being clustered and this will be further discussed in the upcoming section. Outliers may also impact the centroids that are selected while forming a cluster or may tend to form their own cluster which is undesirable. 
+
+
+```{r}
+#multiplying all questions with weighted response by 100 to get total percentages.
+
+source_exp[,12:47] <- source_exp[,12:47] * 100
+
+std_source <- source_exp
+std_source_z <- as.data.frame(lapply(std_source,scale))
+
+```
+
+
+Now that the data was suitably prepared for analysis, the next step was to apply the K-means clustering algorithm to the data.
+The first step was to determine 'K' or the number of the clusters that we expected.
+
+While implementing the K-means algorithm, the most crucial step to successfully implementing this algorithm is identifying ‘K’ which indicates the number of clusters that will be formed during clustering. While it maybe alright to assume the value of ‘K’ for a small dataset, this become increasingly difficult as the amount of data grows and could potentially reveal misleading results which needs to be avoided. 
+
+There exist two approaches to identifying a suitable ‘K’ value, one of which is the elbow method and the other being the silhouette method. By comparing the proportion of clusters that will form an elbow at a place with the total number of clusters, the elbow technique may be used to determine the ideal number of clusters. The silhouette method makes use of a silhouette coefficient that measures how similar a datapoint is within a particular cluster as opposed to the other clusters. A higher silhouette coefficient indicates a better cluster.
+
+```{r}
+#Identify optimal number for k using series of methods via fviz_nbclust
+#elbow test
+fviz_nbclust(std_source_z, kmeans, method = "wss")+ labs(subtitle = "Elbow method")
+#Silhouette test
+fviz_nbclust(std_source_z, kmeans, method = "silhouette")+ labs(subtitle = "Silhouette method")
+```
+
+From the above results, it can be observed that a sharp bend or “elbow” is formed when the value of ‘K’ is 4, thereby indicating that we can safely assume that there is similarity in the data when it is clustered into 4 clusters. From figure 2 it can be observed that, the initial assumption made after analysing the results generated by the elbow method correspond with the number of clusters determined from the results of the silhouette method. Hence, it was determined that the value of ‘K’ would be set as 4 prior to implementing the K-means algorithm on the dataset.
+
+The first iteration of K-means clustering algorithm was then implemented.
+
+```{r}
+set.seed(123)
+#Run the k means algorithm
+result <- kmeans(std_source_z, 4)
+```
+
+
+
+```{r, results='hide'}
+#cluster analysis
+#Change results = TRUE to analyse results of cluster centers.
+result$centers
+```
+
+Below are the centers of each cluster that was formed upon running the K-means clustering algorithm. The number of hospitals belonging to each cluster was found to be 13,2 ,7 and 1 respectively.
+
+```{r}
+result$size
+```
+
+```{r}
+#analysis
+
+source$cluster <- result$cluster
+source$cluster
+
+```
+
+
+Finally, to get a clearer understanding of what the clusters actually look like, the below graph sheds some perspective how each cluster performed across the entire survey.
+```{r message=FALSE}
+centers <- melt(data.frame(cluster = 
+                               rownames(result$centers), result$centers))
+
+#Let's make a simple plot of the centers
+#Note: stat = "identity" overrides the default bar chart statistic of "count"
+ggplot(centers, aes(x = reorder(variable, value), y = value)) +
+    geom_bar(aes(fill = value > 0), width=0.8, stat = "identity") +
+    facet_wrap(~ cluster, nrow=1) +
+    coord_flip() +
+    theme_bw() +
+    theme(panel.border = element_rect(colour = "black", fill=NA), 
+          legend.position="none") +
+    labs(x = NULL)
+```
+---------------------------------------------
+
+Hospitals belonging to the first cluster.
+```{r}
+#cluster1 <- source$org_name[source$cluster ==1]
+#cluster1
+source$org_name[source$cluster ==1]
+```
+
+Hospitals belonging to the second cluster.
+```{r}
+source$org_name[source$cluster ==2]
+```
+
+Hospitals belonging to the third cluster.
+```{r}
+source$org_name[source$cluster ==3]
+```
+
+Hospitals belonging to the fourth cluster.
+```{r}
+source$org_name[source$cluster ==4]
+```
+
+From the plot displayed in figure 8, it can be observed that the fourth cluster formed has a very significant impact in terms of the scores obtained for each question. This simply means that the distance between the centre of the cluster and each data point is quite high. However, this also indicates that it has quite a significant impact on the remaining three clusters. 
+Hence, in order to identify and analyse the impact of the fourth cluster, elements belonging to this cluster were removed temporarily from the dataset to identify how differently the clusters would be formed in this case. However, in order to re-implement the K-means clustering algorithm, both the elbow and silhouette tests needed to be run again in order to determine what the suitable number of clusters would be. This would be an early indicator of how the fourth cluster impacted the entire dataset.
+
+This clearly indicates that the fourth cluster formed in the first iteration of running the K-means clustering algorithm was inaccurate. This could likely be due to the fact that the centroid (centre of the cluster) selected by the algorithm for the fourth cluster was significantly different or isolated in comparison to the other clusters. As a result, the second and third cluster contains a few elements that indicate scores which appear to seem positive in nature, while in reality that isn’t the case.
+
+```{r}
+fviz_cluster(result, data = std_source_z)
+```
+
+It can be observed that, the first three clusters are within close proximity to each other while the fourth cluster with a single element is significantly distant. Additionally, the plot also highlights how all the datapoints belonging to the second cluster are quite close to the centre of the cluster indicating that they have performed really well in the survey or that the responses have been quite favourable. Similarly, the first and third cluster also are formed well considering the proximity of the datapoints.
+
+Hence, for the first iteration of implementation, the K-means clustering algorithm was evaluated with different value of K.
+When the value of K is set as 2, it can be observed that the first cluster has 3 data points that appear to be as outliers which isn’t the ideal case. Similarly, when the value of K is set as 3, the third cluster contains only a single data point. The reason why the elbow method and silhouette method recommended 4 to be the ideal number of clusters could potentially be due to how well the second cluster is formed when K is set as 4. When the value of K was set as 5, it was observed that there was some overlapping that occurred between the second and third cluster, which isn’t ideal. Hence the ideal number of clusters for this iteration of implementing the K-means clustering algorithm was 4.
+
+It should be noted that, just because only a single element formed the fourth cluster that it cannot be disregarded. The second iteration of the K-means clustering algorithm was implemented simply to identify the impact that the centroid of this cluster had on the formation of the other clusters and to also corroborate and analyse how different the clusters formed were from that of first iteration.
+
+```{r}
+set.seed(123)
+result_k2 <- kmeans(std_source_z, 2)
+result_k3 <- kmeans(std_source_z, 3)
+result_k5 <- kmeans(std_source_z, 5)
+p1 <- fviz_cluster(result_k2, geom = "point", data = std_source_z) + ggtitle(" K = 2")
+p2 <- fviz_cluster(result_k3, geom = "point", data = std_source_z) + ggtitle(" K = 3")
+p3 <- fviz_cluster(result, geom = "point", data = std_source_z) + ggtitle(" K = 4")
+p4 <- fviz_cluster(result_k5, geom = "point", data = std_source_z) + ggtitle(" K = 5")
+grid.arrange(p1, p2, p3, p4, nrow = 2)
+```
+
+
+Since the 4th cluster just contains the South Western Ambulance Service NHS Foundation Trust, it only makes sense to remove this from the dataset and see how differently the clusters formed are then.
+
+There isn’t a clear indication of how many clusters can be formed, however the first bend or “elbow” is formed when the value of ‘K’ is 2. This is however confirmed by running the silhouette test which clearly indicates that the optimal number of clusters for the new temporary dataset would be 2. Once the value of ‘K’ was confirmed, the K-means clustering algorithm was implemented for the new temporary dataset which excluded the ‘South Western Ambulance Service NHS Foundation Trust’ as it was the only element belonging to the fourth cluster. 
+```{r}
+#2nd type of clustering with no ambulance service
+data_source2 <- read.csv("staff survey - R FINAL2.csv")
+source2 <- data_source2
+#print(source2)
+source2 <- source2[-30,]
+source2 <- source2[-20:-26,]
+#source2 <- source2[-20,]
+source2 <- mutate_all(source2, ~ifelse(is.na(.x), mean(.x, na.rm = TRUE), .x))
+
+#print(source2)
+
+source_exp_2 <- source2[,6:53]
+source_exp_2[,12:48] <- source_exp_2[,12:48] * 100
+
+std_source_2 <- source_exp_2
+std_source_z_2 <- as.data.frame(lapply(std_source_2,scale))
+
+
+#std_source_z_2 <- std_source_z[-20,]
+
+#Identify optimal number for k using series of methods via fviz_nbclust
+#elbow test
+fviz_nbclust(std_source_z_2, kmeans, method = "wss")+ labs(subtitle = "Elbow method")
+#Silhouette test
+fviz_nbclust(std_source_z_2, kmeans, method = "silhouette")+ labs(subtitle = "Silhouette method")
+
+```
+
+```{r}
+set.seed(123)
+#Run the k means algorithm
+result_2 <- kmeans(std_source_z_2, 2)
+
+```
+
+
+When K was set as 2 for the second iteration.
+```{r}
+
+centers2 <- melt(data.frame(cluster = 
+                               rownames(result_2$centers), result_2$centers))
+
+#Let's make a simple plot of the centers
+#Note: stat = "identity" overrides the default bar chart statistic of "count"
+ggplot(centers2, aes(x = reorder(variable, value), y = value)) +
+    geom_bar(aes(fill = value > 0), width=0.8, stat = "identity") +
+    facet_wrap(~ cluster, nrow=1) +
+    coord_flip() +
+    theme_bw() +
+    theme(panel.border = element_rect(colour = "black", fill=NA), 
+          legend.position="none") +
+    labs(x = NULL)
+
+
+
+```
+
+Upon removing the fourth cluster from the first iteration, it can be observed that only 2 clusters were formed upon the recommendation of the silhouette/elbow method. 
+
+
+
+Hospitals belonging to the second cluster performed comparatively better than the other hospitals in both graphs.
+
+```{r}
+fviz_cluster(result_2, data = std_source_z_2)
+```
+
+Hospitals belonging to the first cluster.
+```{r}
+source2$org_name[result_2$cluster ==1]
+
+```
+Hospitals belonging to the second cluster.
+```{r}
+source2$org_name[result_2$cluster ==2]
+```
+
+Despite the circumstances presented, 6 healthcare organizations still performed well in comparison to the other healthcare organizations in the evaluated sample and they were Devon Partnership NHS Trust, Dorset County Hospital NHS Foundation Trust, Dorset Healthcare University NHS Foundation Trust, Gloucestershire Health and Care NHS Foundation Trust, Somerset NHS Foundation Trust and Yeovil District Hospital NHS Foundation Trust. 
+These 6 healthcare organizations performed well in the second iteration of implementation and thus confirms the initial results that were evaluated. Furthermore, it also provides more context to those healthcare organizations that were placed in the first cluster post the first implementation of the K-means clustering algorithm. It can be observed that the same set of healthcare organizations performed poorly in both iterations indicating that there are areas of improvement that can be looked into with respect to the culture of patient safety culture.
+
+
+Implementing second iteration of K-means clustering algorithm with different values of K.
+
+Alternatively, when the second iteration of the K-means clustering was implemented for different values of K, there were some interesting observations that were showcased. It was observed that when the value of K was set as 3, the clusters formed were similar to those when the value of K was set as 2, with the only difference being an intricate analysis of how the healthcare organizations belonging to the third cluster performed well for certain questions and unfavourably for some questions. When ‘K’ was set as 4 and 5, there were clusters with only a single element present which wasn’t considered to be suitable for analysis.
+```{r}
+set.seed(123)
+result_2_k3 <- kmeans(std_source_z_2, 3)
+result_2_k4 <- kmeans(std_source_z_2, 4)
+result_2_k5 <- kmeans(std_source_z_2, 5)
+p1_2 <- fviz_cluster(result_2, geom = "point", data = std_source_z_2) + ggtitle(" K = 2")
+p2_2 <- fviz_cluster(result_2_k3, geom = "point", data = std_source_z_2) + ggtitle(" K = 3")
+p3_2 <- fviz_cluster(result_2_k4, geom = "point", data = std_source_z_2) + ggtitle(" K = 4")
+p4_2 <- fviz_cluster(result_2_k5, geom = "point", data = std_source_z_2) + ggtitle(" K = 5")
+grid.arrange(p1_2, p2_2, p3_2, p4_2, nrow = 2)
+```
+---------------------------------------------------------------
+
+Results of second iteration of implementation with K = 3.
+
+```{r}
+
+centers2 <- melt(data.frame(cluster = 
+                               rownames(result_2_k3$centers), result_2_k3$centers))
+ggplot(centers2, aes(x = reorder(variable, value), y = value)) +
+    geom_bar(aes(fill = value > 0), width=0.8, stat = "identity") +
+    facet_wrap(~ cluster, nrow=1) +
+    coord_flip() +
+    theme_bw() +
+    theme(panel.border = element_rect(colour = "black", fill=NA), 
+          legend.position="none") +
+    labs(x = NULL)
+```
+-------------------------------------
+
+
+Healthcare organizations belonging to the first cluster.
+
+```{r}
+source2$org_name[result_2_k3$cluster ==1]
+
+```
+
+Healthcare organizations belonging to the second cluster.
+
+```{r}
+source2$org_name[result_2_k3$cluster ==2]
+```
+
+Healthcare organizations belonging to the third cluster.
+
+```{r}
+source2$org_name[result_2_k3$cluster ==3]
+```
+
+
+
+From the analysis performed above, it was determined that the impact imparted by "South Western Ambulance Service NHS Foundation Trust" was quite significant on how the clusters were shaped. Hence the 2nd iteration confirms the performance of the hospitals in the NHS survey and can be corroborated with the results displayed in the earlier graph.
+
+It can be observed that the elements or data points belonging to the second and third cluster performed comparatively better than those that belonged to the first cluster. Additionally, it should be noted that the second cluster only consisted of healthcare organizations that were patient facing, while the third cluster consisted of some healthcare organizations that were patient facing and some that were not.
+
+It should be noted, from all the analysis performed so far on the clustering results, only Yeovil District Hospital NHS Foundation Trust and Dorset Healthcare University NHS Foundation Trust performed well throughout. 
+
+The healthcare organizations that performed poorly in all iterations were Gloucestershire Hospitals NHS Foundation Trust, Great Western Hospitals NHS Foundation Trust, North Bristol NHS Trust, Royal Cornwall Hospitals NHS Trust, Royal Devon University Healthcare NHS Foundation Trust, Royal United Hospitals Bath NHS Foundation Trust, Salisbury NHS Foundation Trust, Torbay and South Devon NHS Foundation Trust, University Hospitals Bristol and Weston NHS Foundation Trust, University Hospitals Dorset NHS Trust, University Hospitals Plymouth NHS Trust and Cornwall Partnership NHS Foundation Trust.
+
+------------------------------------------------------------------------
+
+## Data Envelopment Analysis
+
+Data envelopment analysis was selected for implementation since the sample size of hospitals under consideration was quite small. The purpose of implementing this model was simply to evaluate how the hospitals performed when compared to each other and to also correlate the results obtains from the DEA model to those obtained from the K-means clustering algorithm. Upon successful implementation of data envelopment analysis, the results would indicate a score between 0 and 1, which is then converted into percentage to highlight the efficiency. It could potentially help relate the results by providing more context to the initial research question of the relationship between safer healthcare practices and the efficiencies of the hospitals under consideration. 
+
+Summaries of all 4 datasets that were selected for evaluation. Each dataset is selected either as an input/output variable.
+
+```{r results='hide'}
+
+#remove results='hide' to print results.
+#head(attendance_data)
+summary(attendance_data)
+summary(bed_avail_data)
+summary(dailydischarge_data)
+summary(waitingtime_data)
+```
+
+Although 22 healthcare organizations were considered while implementing the K-means clustering algorithm, only 12 hospitals were selected due to the lack of data pertaining to the four factors that were selected. For the purpose of evaluation, data from April 2020 to March 2023 was considered and the main factors that were selected are monthly A&E attendance, monthly bed availability, monthly patient discharge and waiting times.
+```{r}
+unique_hospitals <- unique(attendance_data$Name)
+unique_hospitals
+```
+
+Evaluating the means across all 4 datasets to understand the underlying trends.
+Average A&E attendance between April 2020 and March 2023 for each hospital.
+
+```{r}
+
+for(hospital in unique_hospitals){
+  hospital_data <- attendance_data[attendance_data$Name == hospital,]
+  attendance_data_mean <- sum(hospital_data[,2:37])/36
+  print(attendance_data_mean)
+}
+
+```
+
+Average bed availability between April 2020 and March 2023 for each hospital.
+
+```{r}
+for(hospital in unique_hospitals){
+  hospital_data <- bed_avail_data[bed_avail_data$Name == hospital,]
+  bed_data_mean <- sum(hospital_data[,2:37])/36
+  print(bed_data_mean)
+}
+```
+
+Average waiting time (completed pathways between referral and consultation) between April 2020 and March 2023 for each hospital.
+
+```{r}
+for(hospital in unique_hospitals){
+  hospital_data <- waitingtime_data[waitingtime_data$Name == hospital,]
+  wait_data_mean <- sum(hospital_data[,2:37])/36
+  print(wait_data_mean)
+}
+```
+
+Average monthly discharge rate between April 2020 and March 2023 for each hospital.
+
+```{r}
+for(hospital in unique_hospitals){
+  hospital_data <- dailydischarge_data[dailydischarge_data$Name == hospital,]
+  discharge_data_mean <- sum(hospital_data[,2:37])/36
+  print(discharge_data_mean)
+}
+```
+
+It was observed that the average A&E attendance was significantly higher than the bed availability for each hospital in the sample. This already throws light on a potential impedance that could hamper the performance efficiency of the hospitals. It should also be noted that since the dataset also contains data between the years of 2020 and 2021 which was when the pandemic occurred, the averages during this time frame would be comparatively higher than the other years. However, this data cannot be disregarded since it would also provide insights about how the hospitals performed when their infrastructure faced some pressure. Additionally, it should be noted that the average waiting time doesn’t indicate the count of the number of days that it would take from referral to consultation, however it refers to the number of completed pathways across all departments for that particular month from the time of referral up till the time of consultation.
+
+In order to implement data envelopment analysis on the data, both inputs and both outputs were converted into numeric matrices. Since R doesn’t allow evaluating multiple inputs and outputs together, it was concluded that four data envelopment analysis models would be implemented to get a closer examination of the hospitals perform under different scenarios. 
+
+
+```{r}
+# Assuming you have already loaded the required library
+library(readxl)
+
+# Read data from Excel file
+#attendance_data <- read_excel("FINAL SHEETS/A&E - Compiled dataset.xlsx")
+
+numeric_columns <- c(
+  'Apr-20', 'May-20', 'Jun-20', 'Jul-20', 'Aug-20', 'Sep-20', 'Oct-20', 'Nov-20', 'Dec-20','Jan-21', 'Feb-21', 'Mar-21', 'Apr-21', 'May-21', 'Jun-21', 'Jul-21', 'Aug-21', 'Sep-21', 'Oct-21', 'Nov-21', 'Dec-21',
+  'Jan-22', 'Feb-22', 'Mar-22', 'Apr-22', 'May-22', 'Jun-22', 'Jul-22', 'Aug-22', 'Sep-22', 'Oct-22', 'Nov-22', 'Dec-22',
+  'Jan-23', 'Feb-23', 'Mar-23'
+)
+
+
+# Create a numeric matrix from selected columns
+input_matrix1 <- as.matrix(attendance_data[, numeric_columns])
+input_matrix2 <- as.matrix(bed_avail_data[, numeric_columns])
+output_matrix1 <- as.matrix(waitingtime_data[, numeric_columns])
+output_matrix2 <- as.matrix(dailydischarge_data[, numeric_columns])
+# Print the numeric matrix
+#print(input_matrix2)
+
+#cor(input_matrix2,output_matrix1)
+
+```
+
+Four DEA models were implemented in order to cross evaluate the 2 input variables against the 2 output variables.
+
+```{r}
+library(Benchmarking)
+is_efficient <- c(TRUE, FALSE, TRUE, FALSE, TRUE, TRUE, FALSE, TRUE, TRUE, FALSE, TRUE, FALSE)
+
+#set.seed(123)
+dea_result1 <- dea(input_matrix1,output_matrix1, RTS = "vrs", SLACK = TRUE)
+dea_result1
+dea.plot(input_matrix1,output_matrix1)
+```
+
+The first DEA model evaluates the performance efficiency of the hospitals when the monthly A&E attendance is used as an input and the monthly waiting time was used as an output. It should be noted that, for this model the return to scale was set as variable returns to scale since increasing or decreasing either of the input or output may make the decision making unit (the hospitals in consideration) greater or lesser efficient. Hence by using a variable returns scale, the algorithm evaluates both scenarios and evaluates the efficiencies.
+
+It was observed that only 2 hospitals out of 12 had relatively poorer performance efficiency when evaluated with Gloucestershire Hospitals NHS Foundation Trust having a performance efficiency of 67.35% and Torbay and South Devon NHS Foundation Trust having a performance efficiency of 75.58%. This indicates that these hospitals performed poorly when the monthly A&E attendance and waiting times were considered compared to the other hospitals.
+
+The second DEA model evaluates the performance efficiency of the hospitals when the monthly A&E attendance was used as an input and the monthly discharge rate was used as an output. To evaluate this model, increasing returns to scale was selected as the returns to scale. This is because as the decision making units increase their scale of operations, which includes both the input and output they may become more efficient. 
+
+```{r}
+dea_result2 <- dea(input_matrix1,output_matrix2, RTS = "irs", SLACK = TRUE)
+dea_result2
+dea.plot(input_matrix1,output_matrix2)
+```
+
+It was observed that the second model returned an output where 3 hospitals had comparatively poorer performance efficiency when evaluating the DEA model with monthly A&E attendance used as an input and the monthly discharge rate used as an output. As observed in the first model, two of the same hospitals from the sample continued to display poorer efficiency.
+
+The third DEA model evaluates the performance efficiency using monthly bed availability and waiting times as the input and output respectively. This model makes use of variable returns to scale, since either increasing or decreasing the bed availability may have the opposite effect on the waiting times experienced. 
+
+```{r}
+dea_result3 <- dea(input_matrix2,output_matrix1, RTS = "vrs", SLACK = TRUE)
+dea_result3
+dea.plot(input_matrix2,output_matrix1)
+```
+
+The third model developed some interesting observations. It was observed that seven out of 12 hospitals reported poorer efficiency relative to the other hospitals within the sample. This highlights that when monthly when monthly bed availability and waiting times were used as the input and output respectively that there exists some correlation between the two variables that can be explored further.
+
+The fourth model finally evaluates the performance efficiency of the hospitals using monthly bed availability and monthly discharge rate as the input and output respectively. This model makes use of increasing returns to scale, since increasing both factors could make the hospitals more efficient.
+
+```{r}
+dea_result4 <- dea(input_matrix2,output_matrix2, RTS = "irs", SLACK = TRUE)
+dea_result4
+dea.plot(input_matrix2,output_matrix2)
+```
+
+The fourth and final model, evaluates the performance efficiency using monthly bed availability and monthly discharge rate as the input and output factors respectively. Two out of twelve hospitals indicated poorer performance efficiency in comparison to the sample. The two hospitals that did have poorer performance efficiency in the fourth model were also the ones that indicated a poorer performance in the first model.
+
+Average performance efficiency across all 4 models.
+
+```{r results='hide', eval=FALSE}
+'''Sl. No	Hospital Name	 Average Performance Efficiency
+	 	 
+1.	Dorset County Hospital NHS Foundation Trust -	1
+2.	North Bristol NHS Trust	- 1
+3.	Royal Cornwall Hospitals NHS Trust -	1
+4.	Royal Devon University Healthcare NHS Foundation Trust -	1
+5.	Somerset NHS Foundation Trust	 - 1
+6.	Yeovil District Hospital NHS Foundation Trust -	0.997025
+7.	Great Western Hospitals NHS Foundation Trust -	0.991275
+8.	Salisbury NHS Foundation Trust -	0.939
+9.	Royal United Hospitals Bath NHS Foundation Trust -	0.92575
+10.	Torbay And South Devon NHS Foundation Trust -	0.86175
+11.	Gloucestershire Hospitals NHS Foundation Trust -	0.842325
+12.	University Hospitals Bristol and Weston NHS Foundation Trust -	0.841425'''
+
+```
+
+It can be observed that seven out of twelve hospitals displayed poorer performance efficiency when the average of the efficiency across all four models was evaluated. This indicates that there is a lot of room for improvement within these hospitals that could help increase the overall performance efficiency and thereby improve the services provided. Further analysis was conducted to identify how the inputs could be increased or decreased to improve the performance efficiency of the hospitals which will be discussed in the upcoming section.
+
+From the overall analysis that was performed which included the clustering of healthcare organizations to implementing data envelopment analysis for certain hospitals, the results give an overall representation of how the healthcare organizations performed in terms of the NHS staff survey and their efficiency over the span of 3 years. However, these results can be further corroborated to understand under what circumstances the performance efficiency was affected for the inefficient healthcare organizations and how those results relate to the K-means clustering algorithms results. This is necessary not only to identify the impact that the factors like A&E attendance, monthly bed availability, monthly waiting times and monthly discharge rate had on the performance but also to understand how the relevant factors could be tackled in order to successfully improve the experience of their patients and that of the employees working at these healthcare organizations. 
+
+In order to determine how the hospitals can alter their inputs or outputs to gain greater performance efficiency, the slack is evaluated to determine what could be done differently. The slack was evaluated across all four models.
+
+It should be noted that the values generated do not indicate that particular input or output has to be increased or decreased on a monthly basis, but rather it was generated to highlight how much should be altered across three years. This is due to the fact that the evaluated input and output datasets that were used for generating the data envelopment analysis model contained data that spanned three years, between April 2020 and March 2023. 
+
+Additionally, it should be noted that a positive slack value indicates that an output needs to be increased to achieve greater performance efficiency and a negative slack value indicates that the input would have to be reduced to increase the performance efficiency. A value of zero indicates that the decision making unit is efficient and no changes are needed. Since the analysis being conducted is on healthcare organizations, it is evident that an input factor such as A&E attendance cannot be altered. However, a resource such as bed availability is a tangible resource which can be looked into. The output factors, which in this case are waiting times and monthly discharge rate, definitely are tangible factors that can be worked upon.
+
+The first model indicates that Gloucestershire Hospitals NHS Foundation Trust and Torbay & South Devon NHS Foundation Trust would have to increase their output by at least 1004.7 and 844.38 on a monthly basis corresponding to their inputs for those given months to ensure maximum performance efficiency. Given the context of the first model, this would mean that for the given A&E attendance of a particular month, the waiting times for each month would have to be increased to the values mentioned previously. This would mean that the completed pathway between referral to consultation would have to be increased to 1004.7 and 844.38 respectively.
+
+
+```{r}
+slack_result1 <- slack(input_matrix1,output_matrix1, dea_result1)
+slack_result1
+```
+
+For the second model, it was observed that Gloucestershire Hospitals NHS Foundation Trust, Torbay & South Devon NHS Foundation Trust and University Hospitals Bristol And Weston NHS Foundation Trust would have to increase their outputs by 1349, 1268.63 and 1194.11 respectively on a monthly basis in order to achieve maximum performance efficiency. Since the second model makes use of monthly discharge rate, it highlights that discharge rates for these three hospitals would have to be increased by the aforementioned values in order to achieve a performance efficiency similar to the other nine hospitals in the sample. 
+
+```{r}
+slack_result2 <- slack(input_matrix1,output_matrix2, dea_result2)
+slack_result2
+```
+
+In the third model it was observed that Gloucestershire Hospitals NHS Foundation Trust, Great Western Hospitals NHS Foundation Trust, Royal United Hospitals Bath NHS Foundation Trust, Salisbury NHS Foundation Trust, Torbay And South Devon NHS Foundation Trust and Yeovil District Hospital NHS Foundation Trust would have to increase their output by 431.5, 348.6, 444.5, 381.9, 369.7 and 459.1 respectively. It should be noted that in this model the input used was bed availability and the output was the waiting time. 
+In comparison to the first model, this model provides slack values for the output which are more likely to be achievable, since it is possible to maintain the same bed availability but increase the number of possible completed pathways to the mentioned values, by increasing the workforce of a hospital. Since at any given point of time the bed availability is highly subjective to the circumstances surrounding the healthcare organization and also includes a variety of external factors such as resource availability, geographic location of healthcare organization, socio-economic factors, it only makes sense to identify if the number of completed pathways (referral to consultation) can be increased.
+```{r}
+
+slack_result3 <- slack(input_matrix2,output_matrix1, dea_result3)
+slack_result3
+
+```
+
+Finally, with the fourth model it was observed that Gloucestershire Hospitals NHS Foundation Trust and University Hospitals Bristol and Weston NHS Foundation Trust would have to increase their outputs by 878.9 and 743.6 respectively in order to achieve maximum performance efficiency. Since this model makes use of monthly discharge rate as an output factor, this would mean both of the hospitals would have to maintain the same bed availability and increase their monthly discharge rate by the aforementioned values to achieve maximum efficiency. 
+Now that a clear metric has been determined to help identify what the hospitals could do differently in order to increase the performance efficiency, the next part of the analysis is to corroborate the results obtained post the analysis performed on the K-means clustering algorithm and the four data envelopment analysis models.
+
+```{r}
+
+slack_result4 <- slack(input_matrix2,output_matrix2, dea_result4)
+slack_result4
+```
+
+
+```{r}
+efficiency_scores1 <- dea_result1$eff
+#efficiency_scores1
+
+efficiency_scores2 <- dea_result2$eff
+#efficiency_scores2
+
+efficiency_scores3 <- dea_result3$eff
+#efficiency_scores3
+
+efficiency_scores4 <- dea_result4$eff
+#efficiency_scores4
+
+
+#plot1
+par(mfrow = c(2, 2)) # Set up multiple plots in a grid
+hist(efficiency_scores1, main = "Model 1 Efficiency Scores Histogram", xlab = "Efficiency")
+hist(efficiency_scores2, main = "Model 2 Efficiency Scores Histogram", xlab = "Efficiency")
+hist(efficiency_scores3, main = "Model 3 Efficiency Scores Histogram", xlab = "Efficiency")
+hist(efficiency_scores4, main = "Model 4 Efficiency Scores Histogram", xlab = "Efficiency")
+
+```
+```{r}
+centers <- melt(data.frame(cluster = 
+                               rownames(result$centers), result$centers))
+
+#Let's make a simple plot of the centers
+#Note: stat = "identity" overrides the default bar chart statistic of "count"
+ggplot(centers, aes(x = reorder(variable, value), y = value)) +
+    geom_bar(aes(fill = value > 0), width=0.8, stat = "identity") +
+    facet_wrap(~ cluster, nrow=1) +
+    coord_flip() +
+    theme_bw() +
+    theme(panel.border = element_rect(colour = "black", fill=NA), 
+          legend.position="none") +
+    labs(x = NULL)
+```
+
+it can be observed that only the third cluster contained elements that weren’t patient facing. However this appears to be misleading since this cluster only contains 2 elements that weren’t patient facing out of 7 elements. Therefore it wouldn’t make sense to judge the entire cluster as non-patient facing and thus this cluster contains results which could have a partial bias due to the two elements that aren’t patient facing and could impact the responses that are provided to the questions of the survey.
+
+Additionally, it was observed that elements belonging to both the second and third cluster performed quite poorly for question 17, indicating the elements belonging to this cluster didn’t observe as many errors or incidents. This is again quite misleading as it is a directly opposite response to how the respondents felt regarding how their organizations delt with errors or unsafe clinical practices.
+
+Finally, even though this model wasn’t accepted to be suitable for final analysis, the results of the fourth cluster cannot be excluded. As discussed in the previous section, this centre of this cluster was formed significantly further away from the others. Since as an ambulance service, the employees would be dealing with high pressure situations in servicing their patients, it is probable that errors could occur occasionally. However, strong negative responses to question 3c to 3f, question 19a and 19b indicates that there was a very prevalent environment of unsafe clinical practices and that the employees didn’t feel that their concerns or thoughts were being addressed. This poses a major challenge for the South Western Ambulance Service NHS Foundation Trust and should be addressed in order to improvise their service and also to raise the culture of innovation and improvement.
+
+
+```{r}
+centers2 <- melt(data.frame(cluster = 
+                               rownames(result_2_k3$centers), result_2_k3$centers))
+ggplot(centers2, aes(x = reorder(variable, value), y = value)) +
+    geom_bar(aes(fill = value > 0), width=0.8, stat = "identity") +
+    facet_wrap(~ cluster, nrow=1) +
+    coord_flip() +
+    theme_bw() +
+    theme(panel.border = element_rect(colour = "black", fill=NA), 
+          legend.position="none") +
+    labs(x = NULL)
+```
+
+The third and final iteration of implementing the clustering algorithm highlights that the first cluster includes healthcare organizations that were patient facing but still performed poorly. However, the elements belonging to this cluster performed well for question 17, indicating that these healthcare organizations did observe quite a few errors or critical incidents, but the poor responses to the remaining questions indicate that they weren’t dealt with appropriately according to the respondents. The second cluster performed significantly better than the first and third and the negative value corresponding to question 17 indicates that despite not having as many errors or critical incidents, the respondents felt that their thoughts were heard, and feedback was provided and that there did in fact exist a great culture of innovation and improvement with ethically responsible clinical practices being followed. 
+
+Finally, the third cluster contained Sirona Care & Health and Livewell Southwest that weren’t patient facing while the remaining 6 healthcare organizations were patient facing. Among the third cluster it was observed that, question 19b had negative responses for two years indicating that the respondents did not strongly feel that their organizations would address their concerns. Question 19a too had a negative response, indicating that the staff didn’t feel safe raising their concerns with regards to errors or critical incidents. This clearly indicates that the staff’s concerns weren’t being addressed as well as the other healthcare organizations that belonged to the second cluster.
+
+In response to the initial research question which explores the relation between maintaining a culture which promotes innovation and improvement and safer clinical practices, it was observed that the clusters that performed well, produced great positive results for questions PP5 and PP5_1 which specifically highlights if the respondents felt that they were always developing and learning. Hence, these clusters were deemed suitable to be accepted and no further iterations on the K-means clustering algorithm were performed. 
+
+The final clustering results indicated that,
+
+Great performers - Yeovil District Hospital NHS Foundation Trust, Dorset Healthcare University NHS Foundation Trust
+
+Moderately Good Performers - Avon and Wiltshire Mental Health Partnership NHS Trust, Devon Partnership NHS Trust, Dorset County Hospital NHS Foundation Trust, Gloucestershire Health and Care NHS Foundation Trust, NHS South, Central and West CSU, Livewell Southwest, Sirona Care & Health, Somerset NHS Foundation Trust
+
+Poor Performers - Gloucestershire Hospitals NHS Foundation Trust, Great Western Hospitals NHS Foundation Trust, North Bristol NHS Trust, Royal Cornwall Hospitals NHS Trust, Royal Devon University Healthcare NHS Foundation Trust, Royal United Hospitals Bath NHS Foundation Trust, Salisbury NHS Foundation Trust, Torbay and South Devon NHS Foundation Trust, University Hospitals Bristol and Weston NHS Foundation Trust, University Hospitals Dorset NHS Trust, University Hospitals Plymouth NHS Trust and Cornwall Partnership NHS Foundation Trust
+
+
+
+![Final results from clustering algorithm and the four data envelopment analysis models.](finalresults.png)
+
+The results presented answer the initial research questions that were posed by shedding light on the performance of the 12 hospitals across the K-means clustering algorithm and four DEA models. By clustering the initial 23 healthcare organizations on the basis of their responses to the NHS staff survey, the analysis conducted was able to determine how the respondents felt about ethics surrounding the clinical practices being followed within their organization and if there was an environment of innovation and improvement that was prevalent within their healthcare organization. Subsequently, by evaluating the performance efficiency of 12 hospitals using data envelopment analysis, the analysis conducted was able to determine how efficient each hospital was relative to each other.
+
+It can be observed three out of five hospitals performed poorly in the NHS staff survey despite having a performance efficiency of 100% in comparison to the other seven hospitals. This indicates that irrespective of the performance efficiency of these hospitals, there was a sense among the respondents that they did not feel like the culture within their organizations encouraged innovation or improvement. Since these hospitals performed better than the others in terms of their efficiency, this indicates that there weren’t any strenuous factors that could’ve attributed to this. It also highlights a key issue within the organizations, wherein the respondents did not feel like the organization made them feel comfortable enough to report clinical errors, near misses or incidents that could be fatal to the patient. This could also be indicated by the lack of communication amongst the hierarchy depicted by the negative responses to question 3c to question 3f, indicating that the respondents didn’t feel like they were able to make suggestions or involved in making changes. This proves to be quite significant, as it could impact the performance of the hospitals in the future especially under strenuous conditions.
+
+It was also observed that six hospitals performed poorly both in the NHS staff survey and across all four data envelopment analysis models. This highlights that there was a strong impact caused by the performance efficiency which could have impacted the clinical practices followed by these hospitals. Additionally, it should be noted that low performance efficiency may also be an indicator of the strain that is placed on the workforce which could end up resulting in mishaps and clinical errors. Therefore, there is a need to understand how the output factors need to be adjusted in order to increase the efficiency which was discussed earlier. Beyond the poor performance efficiency, it also was observed that respondents felt that their suggestions regarding improvement and the opportunity to learn and develop wasn’t being met. This clearly indicates that these hospitals were lagging behind the other hospitals in terms of development and improving their clinical practices to ensure that safer practices were being enforced. The negative responses to question 18a and question 18b indicate that staff also didn’t feel that their organization treated them fairly if they were involved in an error, near miss or incident, which indicates that the staff could be hesitant to report these incidents which would prevent appropriate learning and development to ensure that these situations aren’t repeated again. 
+
+Finally, it was observed that only one hospital performed well in the NHS staff survey and across the 4 DEA models that were implemented. It is recommended that the other hospitals analyse what was done differently within Yeovil District Hospital NHS Foundation Trust to maintain and encourage an environment which supported innovation and improvement. It should also be further examined about how unsafe clinical practices, near misses or incidents were dealt with in this hospital, since they evidently had the most positive results throughout. Although, it should be noted that the average A&E attendance for this hospital was comparatively much lower than the other hospitals with an average of just 758, which indicates that workforce of this hospital maybe weren’t placed under as much strenuous conditions as the other hospitals. However, the results from the NHS staff survey for this respondent cannot be understated since it managed to perform well across all 3 iterations of the K-means algorithm that was performed, indicating that they did something differently that wasn’t being followed by the others. It should also be noted that this hospital belonged to the cluster that had a significant positive response to the question PP4, indicating that their workforce felt healthy and safe in comparison to the hospitals belonging to the other clusters. This too plays quite a large role in how the workforce deals with clinical errors and near misses since it is essential that a workforce are at their best while providing a service to its patients. 
+
+------------------------------------------------------------------------------------
+
+## Conclusion
+
+This report set out to determine if there exists relationship between a culture of innovation and improvement and the staff observing safer healthcare practices amongst 22 healthcare organizations and to evaluate this through the NHS staff survey that is carried out on a yearly basis. Subsequently, the next research question was to determine what the performance efficiency for 12 hospitals out of these 22 healthcare organizations and to finally identify if there was any correlation or impact between the two research questions that were posed initially.
+
+Through the analysis conducted, it was initially observed that implementing the K-means clustering algorithm just once wouldn’t suffice to provide context to the initial four clusters that were formed and as a result further analysis was performed. Upon removing the cluster that only contained a single element, it was observed that the clusters formed on the new temporary dataset was slightly different that those that were formed post the first iteration. However, it was also decided to use the same temporary dataset and implement the K-means clustering algorithm with different values of ‘K’. Since the second iteration was evaluated with K being set as 2 which was suggested by running the elbow and silhouette test, the final iteration was implemented on the temporary dataset with K being at 3. It was observed that the clusters were formed similar to those when the value of K was 2, however in this instance it provided more accurate and probably reasoning for placing certain healthcare organizations within certain clusters as explained earlier on in the analysis. The first cluster contained hospitals which performed poorly in the survey, the second cluster contained hospitals that performed the best in comparison to the first and third cluster and finally, the third cluster contained those hospitals that performed moderately well in the survey. The clustering results were able to paint a picture on how the hospitals performed across different themes of the questions that were presented to the respondents.
+
+The next part of the analysis was to determine the performance efficiency of 12 hospitals using inputs like monthly A&E attendance data and monthly bed availability and outputs like monthly waiting time and monthly discharge rate. These input and output variables consisted of datasets that were publicly available on the NHS website and the data pertaining to these 12 hospitals were selected between April 2020 and March 2023. Since the certain parts of the data was collected on a daily basis and some on a monthly basis, all the data was pre-processed and collated into 4 individual datasets to ensure suitable analysis and implementation of data envelopment analysis. Since it was not possible to implement a DEA model with multiple inputs and multiple outputs at once on the statistical software R, it was decided that 4 DEA models would be implemented which would also allow for a closer analysis of how the hospitals performed when different metrics of the hospitals were tested against each other.
+
+Upon implementing the four DEA models, it was observed that seven out of twelve hospitals had relatively poorer performance efficiency in comparison to the other five hospitals. To further understand what factors could be changed to maximize the performance efficiency of these seven hospitals, the slack values of each of these hospitals were evaluated. Finally, the results obtained from implementing the data envelopment analysis models was corroborated with the results from implementing the K-means clustering algorithm to determine the relation between the performance efficiency of the twelve hospitals and the clustering results. It was determined that only one hospital performed well across both the tests that were conducted and that six hospitals performed poorly in both. Three hospitals had 100% performance efficiency, but performed poorly in the staff survey indicating that wasn’t any impact from the input and output factors used to evaluate the data envelopment analysis models. 
+
+In contrast with the existing literature that exists, this report made use of a unique approach towards determining the relation between performance efficiency and safer clinical practices being practiced within hospitals. However, the analysis could be improved by combining the two input and two output factors to evaluate a single DEA model. Further studies can be implemented on the same wavelength, by including more variables like the various resources being used by the hospitals, mortality rate of patients being treated, costs being spent on daily/monthly basis etc. The context of the problem statements that could potentially be explored are numerous, but the objective must always remain to improvise the experience provided for the patients. In the case of ensuring safer clinical practices and maintaining an environment which promotes innovation and improvement, future studies can be conducted on a deeper level within each organization to understand the root cause of near misses or incidents that can be prevented. To determine how the performance efficiency may vary or how the inputs and outputs can be altered to make the hospitals more efficient, various forecasting techniques can be implemented to evaluate the expected inputs & prepare accordingly. 
+
+
